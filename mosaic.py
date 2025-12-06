@@ -1,12 +1,16 @@
 import csv
+import os
 import numpy as np
 import cv2
+import math
 from torchvision import datasets, transforms
-from skimage.color import rgb2lab, lab2rgb #pip install scikit-image
-
+from skimage.color import rgb2lab, lab2rgb 
+import math          
+import matplotlib.pyplot as plt
 
 DATA_ROOT = "./data"
 AVERAGES_CSV = "averages.csv"
+OUTPUT_DIR = "Output_Images"
 
 def load_images():
 
@@ -51,6 +55,19 @@ def load_image_by_index(index, train, test):
     img_bgr = cv2.cvtColor((img_np * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
     return img_bgr
 
+def compute_mse_psnr(orig_bgr, recon_bgr):
+    orig = orig_bgr.astype(np.float32)
+    recon = recon_bgr.astype(np.float32)
+
+    diff = orig - recon
+    mse = np.mean(diff ** 2)
+
+    if mse == 0:
+        psnr = float("inf")
+    else:
+        psnr = 10 * math.log10((255.0 ** 2) / mse)
+
+    return mse, psnr
 
 def make_mosiac(in_path, out_path, block_size=32):
 
@@ -60,6 +77,8 @@ def make_mosiac(in_path, out_path, block_size=32):
 
     #Load the Base Image and compute number of blocks
     base_img = cv2.imread(in_path)
+    if base_img is None:
+        raise FileNotFoundError(f"Could not read image at path: {in_path}")
 
     h, w, _ = base_img.shape
     h_blocks = h // block_size
@@ -97,7 +116,7 @@ def make_mosiac(in_path, out_path, block_size=32):
 
             #Find the closest matching image from averages.csv
             closest_idx = find_closest_image(L_mean, A_mean, B_mean, means)
-            print (f"Placing block ({by}, {bx}) with image index {closest_idx}")
+            #print (f"Placing block ({by}, {bx}) with image index {closest_idx}")
 
             closest_img = load_image_by_index(closest_idx, train, test)
 
@@ -106,12 +125,118 @@ def make_mosiac(in_path, out_path, block_size=32):
             resized_img = cv2.resize(closest_img, (block_size, block_size))
             out_img[y1:y2, x1:x2, :] = resized_img
 
-    #Convert back to BGR and save
-    cv2.imwrite(out_path, out_img)
+    #Compute MSE and PSNR
+    mse, psnr = compute_mse_psnr(base_img, out_img)
     print(f"Mosaic saved to {out_path}")
+    print(f"MSE: {mse:.2f}, PSNR: {psnr:.2f} dB")
+
+    # save mosaic
+    cv2.imwrite(out_path, out_img)
+
+    # return metrics so we can log them
+    return mse, psnr
+
+import numpy as np
+
+def plot_results(results):
+    first_key = next(iter(results))
+    block_sizes = results[first_key]["block_sizes"]
+    x = np.arange(len(block_sizes))  # [0, 1, 2]
+
+    name_map = {
+        "flower": "Flower",
+        "img2": "Landscape",
+        "img3": "Bird",
+    }
+
+    # MSE 
+    plt.figure()
+    for name, metrics in results.items():
+        mse = metrics["mse"]
+        plt.plot(x, mse, marker="o", label=name_map.get(name, name))
+
+    plt.xlabel("Block size")
+    plt.ylabel("MSE")
+    plt.title("MSE vs block size")
+    plt.xticks(x, block_sizes)  
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUTPUT_DIR, "mse_calc.png"))
+
+    # PSNR 
+    plt.figure()
+    for name, metrics in results.items():
+        psnr = metrics["psnr"]
+        plt.plot(x, psnr, marker="o", label=name_map.get(name, name))
+
+    plt.xlabel("Block size")
+    plt.ylabel("PSNR (dB)")
+    plt.title("PSNR vs block size")
+    plt.xticks(x, block_sizes)   
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUTPUT_DIR, "psnr_calc.png"))
 
 if __name__ == "__main__":
-    make_mosiac("Input_Images/flower.jpg", "mosaic_output.jpg", block_size=32)
+    # Image paths
+    img1_path = "Input_Images/flower.jpg"
+    img2_path = "Input_Images/landscape.jpg"
+    img3_path = "Input_Images/bird.jpg"
+
+    # Image 1
+    mse_flower_16, psnr_flower_16 = make_mosiac(
+        img1_path, os.path.join(OUTPUT_DIR, "mosaic_flower_16.jpg"), block_size=16
+    )
+    mse_flower_32, psnr_flower_32 = make_mosiac(
+        img1_path, os.path.join(OUTPUT_DIR, "mosaic_flower_32.jpg"), block_size=32
+    )
+    mse_flower_64, psnr_flower_64 = make_mosiac(
+        img1_path, os.path.join(OUTPUT_DIR, "mosaic_flower_64.jpg"), block_size=64
+    )
+
+    # Image 2
+    mse_img2_16, psnr_img2_16 = make_mosiac(
+        img2_path, os.path.join(OUTPUT_DIR, "mosaic_landscape_16.jpg"), block_size=16
+    )
+    mse_img2_32, psnr_img2_32 = make_mosiac(
+        img2_path, os.path.join(OUTPUT_DIR, "mosaic_landscape_32.jpg"), block_size=32
+    )
+    mse_img2_64, psnr_img2_64 = make_mosiac(
+        img2_path, os.path.join(OUTPUT_DIR, "mosaic_landscape_64.jpg"), block_size=64
+    )
+
+    # Image 3
+    mse_img3_16, psnr_img3_16 = make_mosiac(
+        img3_path, os.path.join(OUTPUT_DIR, "mosaic_bird_16.jpg"), block_size=16
+    )
+    mse_img3_32, psnr_img3_32 = make_mosiac(
+        img3_path, os.path.join(OUTPUT_DIR, "mosaic_bird_32.jpg"), block_size=32
+    )
+    mse_img3_64, psnr_img3_64 = make_mosiac(
+        img3_path, os.path.join(OUTPUT_DIR, "mosaic_bird_64.jpg"), block_size=64
+    )
+
+
+    # Format and plot results
+    results = {
+        "flower": {
+            "block_sizes": [16, 32, 64],
+            "mse":  [mse_flower_16, mse_flower_32, mse_flower_64],
+            "psnr": [psnr_flower_16, psnr_flower_32, psnr_flower_64],
+        },
+        "img2": {
+            "block_sizes": [16, 32, 64],
+            "mse":  [mse_img2_16, mse_img2_32, mse_img2_64],
+            "psnr": [psnr_img2_16, psnr_img2_32, psnr_img2_64],
+        },
+        "img3": {
+            "block_sizes": [16, 32, 64],
+            "mse":  [mse_img3_16, mse_img3_32, mse_img3_64],
+            "psnr": [psnr_img3_16, psnr_img3_32, psnr_img3_64],
+        },
+    }
+
+    plot_results(results)
 
     
 
